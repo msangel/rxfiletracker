@@ -1,5 +1,6 @@
 package ua.co.k.rxfiletracker;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -8,11 +9,16 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
+import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.disposables.Disposable;
 import io.reactivex.rxjava3.observers.TestObserver;
+import org.apache.commons.io.monitor.FileAlterationListener;
+import org.apache.commons.io.monitor.FileAlterationListenerAdaptor;
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -29,6 +35,34 @@ public class RxFileTrackerTest {
     }
 
     @Test
+    public void subscribesAndListensForEvents() throws Exception {
+        Path directory = Files.createTempDirectory("rxfiletracker-listen-");
+        Path file = directory.resolve("example.txt");
+        CountDownLatch eventReceived = new CountDownLatch(1);
+        AtomicReference<FsEvent> receivedEvent = new AtomicReference<>();
+
+        Disposable subscription = RxFileTracker.watch(directory, 20L).subscribe(event -> {
+            if (event.getPath().equals(file)) {
+                receivedEvent.set(event);
+                eventReceived.countDown();
+            }
+        });
+
+        try {
+            Files.createFile(file);
+
+            assertTrue(eventReceived.await(2, TimeUnit.SECONDS));
+            assertNotNull(receivedEvent.get());
+            assertEquals(FsEvent.Type.CREATED, receivedEvent.get().getType());
+            assertEquals(file, receivedEvent.get().getPath());
+        } finally {
+            subscription.dispose();
+            Files.deleteIfExists(file);
+            Files.deleteIfExists(directory);
+        }
+    }
+
+    @Test
     public void reportsMissingDirectory() throws Exception {
         Path directory = Files.createTempDirectory("rxfiletracker-missing-");
         Files.delete(directory);
@@ -36,6 +70,54 @@ public class RxFileTrackerTest {
         TestObserver<FsEvent> observer = RxFileTracker.watch(directory, 20L).test();
 
         observer.assertError(IllegalArgumentException.class);
+    }
+
+    @Test
+    public void ignoresEventsAfterDisposal() {
+        AtomicReference<FileAlterationListener> listener = new AtomicReference<>();
+        TestObserver<FsEvent> observer = Observable.<FsEvent>create(emitter ->
+                listener.set(new FileAlterationListenerAdaptor() {
+                    @Override
+                    public void onDirectoryCreate(File directory) {
+                        emit(FsEvent.created(directory.toPath()));
+                    }
+
+                    @Override
+                    public void onDirectoryChange(File directory) {
+                        emit(FsEvent.edited(directory.toPath()));
+                    }
+
+                    @Override
+                    public void onDirectoryDelete(File directory) {
+                        emit(FsEvent.deleted(directory.toPath()));
+                    }
+
+                    @Override
+                    public void onFileCreate(File file) {
+                        emit(FsEvent.created(file.toPath()));
+                    }
+
+                    @Override
+                    public void onFileChange(File file) {
+                        emit(FsEvent.edited(file.toPath()));
+                    }
+
+                    @Override
+                    public void onFileDelete(File file) {
+                        emit(FsEvent.deleted(file.toPath()));
+                    }
+
+                    private void emit(FsEvent event) {
+                        if (!emitter.isDisposed()) {
+                            emitter.onNext(event);
+                        }
+                    }
+                })).test();
+
+        observer.dispose();
+        listener.get().onFileCreate(new File("ignored.txt"));
+
+        observer.assertNoValues();
     }
 
     @Test
@@ -122,4 +204,5 @@ public class RxFileTrackerTest {
             Files.deleteIfExists(directory);
         }
     }
+
 }
