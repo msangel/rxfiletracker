@@ -3,6 +3,7 @@ package ua.co.k.rxfiletracker;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.FileTime;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -35,6 +36,43 @@ public class RxFileTrackerTest {
         TestObserver<FsEvent> observer = RxFileTracker.watch(directory, 20L).test();
 
         observer.assertError(IllegalArgumentException.class);
+    }
+
+    @Test
+    public void emitsDirectoryEvents() throws Exception {
+        Path root = Files.createTempDirectory("rxfiletracker-directories-");
+        Path directory = root.resolve("tracked");
+        CountDownLatch created = new CountDownLatch(1);
+        CountDownLatch edited = new CountDownLatch(1);
+        CountDownLatch deleted = new CountDownLatch(1);
+        Disposable subscription = RxFileTracker.watch(root, 20L).subscribe(event -> {
+            if (!event.getPath().equals(directory)) {
+                return;
+            }
+            if (event.getType() == FsEvent.Type.CREATED) {
+                created.countDown();
+            } else if (event.getType() == FsEvent.Type.EDITED) {
+                edited.countDown();
+            } else if (event.getType() == FsEvent.Type.DELETED) {
+                deleted.countDown();
+            }
+        });
+
+        try {
+            Files.createDirectory(directory);
+            assertTrue(created.await(2, TimeUnit.SECONDS));
+
+            long lastModified = Files.getLastModifiedTime(directory).toMillis();
+            Files.setLastModifiedTime(directory, FileTime.fromMillis(lastModified + 2_000L));
+            assertTrue(edited.await(2, TimeUnit.SECONDS));
+
+            Files.delete(directory);
+            assertTrue(deleted.await(2, TimeUnit.SECONDS));
+        } finally {
+            subscription.dispose();
+            Files.deleteIfExists(directory);
+            Files.deleteIfExists(root);
+        }
     }
 
     @Test
