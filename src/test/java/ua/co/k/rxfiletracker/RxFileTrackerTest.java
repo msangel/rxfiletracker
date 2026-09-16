@@ -63,6 +63,36 @@ public class RxFileTrackerTest {
     }
 
     @Test
+    public void emitsAbsolutePathsWhenWatchingRelativeDirectory() throws Exception {
+        Path directory = Files.createTempDirectory(
+                Paths.get("."), "rxfiletracker-relative-");
+        Path file = directory.resolve("example.txt");
+        Path expectedPath = file.toAbsolutePath().normalize();
+        CountDownLatch eventReceived = new CountDownLatch(1);
+        AtomicReference<FsEvent> receivedEvent = new AtomicReference<>();
+
+        Disposable subscription = RxFileTracker.watch(directory, 20L).subscribe(event -> {
+            if (event.getType() == FsEvent.Type.CREATED
+                    && event.getPath().getFileName().equals(file.getFileName())) {
+                receivedEvent.set(event);
+                eventReceived.countDown();
+            }
+        });
+
+        try {
+            Files.createFile(file);
+
+            assertTrue(eventReceived.await(2, TimeUnit.SECONDS));
+            assertTrue(receivedEvent.get().getPath().isAbsolute());
+            assertEquals(expectedPath, receivedEvent.get().getPath());
+        } finally {
+            subscription.dispose();
+            Files.deleteIfExists(file);
+            Files.deleteIfExists(directory);
+        }
+    }
+
+    @Test
     public void reportsMissingDirectory() throws Exception {
         Path directory = Files.createTempDirectory("rxfiletracker-missing-");
         Files.delete(directory);

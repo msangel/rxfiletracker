@@ -3,7 +3,7 @@ package ua.co.k.rxfiletracker;
 import java.nio.file.Path;
 import java.util.Objects;
 
-/** One change to one file-system path. */
+/** One change to one absolute, normalized file-system path. */
 public final class FsEvent {
 
     public enum Type {
@@ -17,7 +17,9 @@ public final class FsEvent {
 
     private FsEvent(Type type, Path path) {
         this.type = type;
-        this.path = Objects.requireNonNull(path, "path");
+        this.path = Objects.requireNonNull(path, "path")
+                .toAbsolutePath()
+                .normalize();
     }
 
     static FsEvent created(Path path) {
@@ -36,6 +38,7 @@ public final class FsEvent {
         return type;
     }
 
+    /** Returns the affected absolute, normalized path. */
     public Path getPath() {
         return path;
     }
